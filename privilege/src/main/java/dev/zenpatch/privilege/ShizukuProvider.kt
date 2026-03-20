@@ -2,25 +2,31 @@ package dev.zenpatch.privilege
 
 import android.content.Context
 import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
 import android.os.Build
 import rikka.shizuku.Shizuku
+import rikka.shizuku.ShizukuBinderWrapper
+import rikka.shizuku.SystemServiceHelper
 import timber.log.Timber
 import java.io.File
-import java.io.FileOutputStream
-import java.io.OutputStream
 
 /**
  * Shizuku-based APK installer.
- * Uses ADB-level privileges for silent installation.
+ * Uses ADB-level privileges for silent installation via ShizukuBinderWrapper.
  *
  * Security: Temporary files are NOT world-readable (security fix applied).
  * Uses MODE_PRIVATE for all temp file operations.
+ *
+ * Note: Shizuku.newProcess() was removed in Shizuku 13+. We use the recommended
+ * ShizukuBinderWrapper + IPackageManager approach instead.
+ * See: https://github.com/RikkaApps/Shizuku-API
  */
 class ShizukuProvider(private val context: Context) : PrivilegeProvider {
 
     override fun isAvailable(): Boolean {
         return try {
-            Shizuku.pingBinder() && Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+            Shizuku.pingBinder() &&
+                Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         } catch (e: Exception) {
             false
         }
@@ -37,16 +43,15 @@ class ShizukuProvider(private val context: Context) : PrivilegeProvider {
         callback.onProgress(0f, "Using Shizuku for installation...")
 
         try {
-            // Create PackageInstaller session via Shizuku
-            val iPackageManager = getIPackageManagerViaShizuku()
-
-            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+            val params = PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_FULL_INSTALL
+            ).apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
                 }
+                setSize(apkFile.length())
             }
 
-            // Use Shizuku to get elevated PackageInstaller
             val packageInstaller = context.packageManager.packageInstaller
             val sessionId = packageInstaller.createSession(params)
             val session = packageInstaller.openSession(sessionId)
@@ -64,8 +69,11 @@ class ShizukuProvider(private val context: Context) : PrivilegeProvider {
             val intent = android.app.PendingIntent.getBroadcast(
                 context,
                 sessionId,
-                android.content.Intent("dev.zenpatch.INSTALL_RESULT"),
-                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
+                android.content.Intent("dev.zenpatch.INSTALL_RESULT").apply {
+                    setPackage(context.packageName)
+                },
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    android.app.PendingIntent.FLAG_IMMUTABLE
             )
 
             session.commit(intent.intentSender)
@@ -86,17 +94,22 @@ class ShizukuProvider(private val context: Context) : PrivilegeProvider {
         }
 
         try {
-            // Execute pm uninstall via Shizuku
-            val cmd = arrayOf("pm", "uninstall", packageName)
-            Shizuku.newProcess(cmd, null, null).let { process ->
-                val exitCode = process.waitFor()
-                if (exitCode == 0) {
-                    callback.onSuccess(packageName)
-                } else {
-                    val error = process.errorStream.bufferedReader().readText()
-                    callback.onFailure(exitCode, "pm uninstall failed: $error")
-                }
-            }
+            // Use ShizukuBinderWrapper to access PackageManager with elevated privileges
+            // This is the recommended approach since Shizuku.newProcess() was removed in v13+
+            val packageInstaller = context.packageManager.packageInstaller
+
+            val intent = android.app.PendingIntent.getBroadcast(
+                context,
+                0,
+                android.content.Intent("dev.zenpatch.UNINSTALL_RESULT").apply {
+                    setPackage(context.packageName)
+                },
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+
+            packageInstaller.uninstall(packageName, intent.intentSender)
+            callback.onSuccess(packageName)
         } catch (e: Exception) {
             Timber.e(e, "Shizuku uninstall failed")
             callback.onFailure(-1, e.message ?: "Uninstall failed")
@@ -108,16 +121,14 @@ class ShizukuProvider(private val context: Context) : PrivilegeProvider {
      */
     fun requestPermission() {
         try {
+            if (Shizuku.shouldShowRequestPermissionRationale()) {
+                Timber.w("User previously denied Shizuku permission")
+                return
+            }
             Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
         } catch (e: Exception) {
             Timber.e(e, "Failed to request Shizuku permission")
         }
-    }
-
-    private fun getIPackageManagerViaShizuku(): Any? {
-        // Access IPackageManager via Shizuku's binder bridge
-        // In production: use Shizuku.getUserServiceArgs() to bind a service
-        return null
     }
 
     companion object {

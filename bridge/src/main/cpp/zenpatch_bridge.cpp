@@ -2,9 +2,12 @@
 #include <android/log.h>
 #include <dlfcn.h>
 #include <string>
+#include <cstring>
 #include <unordered_map>
 #include <mutex>
 #include <atomic>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "include/zenpatch_bridge.h"
 
@@ -16,6 +19,161 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// ---- Minimal inline hook implementation ----
+// This provides the inline_hooker/inline_unhooker callbacks that LSPlant requires.
+// Uses a simple trampoline: overwrite the first instructions of the target function
+// with a jump to the replacement, and allocate a trampoline for the original code.
+
+struct InlineHookEntry {
+    void* target;
+    void* replacement;
+    void* trampoline;    // backup: original bytes + jump back
+    uint8_t saved_bytes[16]; // original instruction bytes
+    size_t overwrite_size;
+};
+
+static std::mutex g_inline_hooks_mutex;
+static std::unordered_map<void*, InlineHookEntry> g_inline_hooks;
+
+static size_t page_size() {
+    static size_t ps = sysconf(_SC_PAGESIZE);
+    return ps;
+}
+
+static void* page_align(void* addr) {
+    return reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(addr) & ~(page_size() - 1));
+}
+
+static bool set_memory_rwx(void* addr, size_t len) {
+    void* page = page_align(addr);
+    size_t full_len = reinterpret_cast<uintptr_t>(addr) - reinterpret_cast<uintptr_t>(page) + len;
+    // Round up to page size
+    full_len = (full_len + page_size() - 1) & ~(page_size() - 1);
+    return mprotect(page, full_len, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+}
+
+#if defined(__aarch64__)
+// ARM64: 16 bytes for LDR X17, [PC, #8]; BR X17; <8-byte address>
+static constexpr size_t kJumpSize = 16;
+
+static void write_jump(void* from, void* to) {
+    uint32_t* code = reinterpret_cast<uint32_t*>(from);
+    // LDR X17, [PC, #8]  -> loads the address that follows the BR
+    code[0] = 0x58000051; // LDR X17, #8
+    // BR X17
+    code[1] = 0xD61F0220;
+    // 8-byte absolute address
+    memcpy(&code[2], &to, sizeof(void*));
+}
+#elif defined(__arm__)
+// ARM32: 8 bytes: LDR PC, [PC, #-4]; <4-byte address>
+static constexpr size_t kJumpSize = 8;
+
+static void write_jump(void* from, void* to) {
+    uint32_t* code = reinterpret_cast<uint32_t*>(from);
+    // LDR PC, [PC, #-4]
+    code[0] = 0xE51FF004;
+    // 4-byte absolute address
+    memcpy(&code[1], &to, sizeof(void*));
+}
+#elif defined(__x86_64__)
+// x86_64: JMP [RIP+0]; <8-byte address> = 14 bytes
+static constexpr size_t kJumpSize = 14;
+
+static void write_jump(void* from, void* to) {
+    uint8_t* code = reinterpret_cast<uint8_t*>(from);
+    // FF 25 00 00 00 00 = JMP [RIP+0]
+    code[0] = 0xFF;
+    code[1] = 0x25;
+    code[2] = code[3] = code[4] = code[5] = 0x00;
+    memcpy(&code[6], &to, sizeof(void*));
+}
+#else
+#error "Unsupported architecture for inline hook"
+#endif
+
+/**
+ * Inline hook: overwrites the first bytes of target with a jump to hooker.
+ * Returns a trampoline that executes the original bytes then jumps back.
+ */
+static void* inline_hook(void* target, void* hooker) {
+    if (!target || !hooker) return nullptr;
+
+    // Allocate trampoline: saved bytes + jump back to (target + kJumpSize)
+    size_t trampoline_size = kJumpSize + kJumpSize; // original bytes + jump
+    void* trampoline = mmap(nullptr, page_size(),
+                            PROT_READ | PROT_WRITE | PROT_EXEC,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (trampoline == MAP_FAILED) {
+        LOGE("inline_hook: mmap failed");
+        return nullptr;
+    }
+
+    // Save original bytes
+    uint8_t saved[kJumpSize];
+    memcpy(saved, target, kJumpSize);
+
+    // Write trampoline: original bytes + jump back
+    memcpy(trampoline, saved, kJumpSize);
+    void* continue_addr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(target) + kJumpSize);
+    write_jump(reinterpret_cast<uint8_t*>(trampoline) + kJumpSize, continue_addr);
+
+    // Make target writable and write jump to hooker
+    if (!set_memory_rwx(target, kJumpSize)) {
+        LOGE("inline_hook: mprotect failed");
+        munmap(trampoline, page_size());
+        return nullptr;
+    }
+    write_jump(target, hooker);
+
+    // Clear instruction cache
+    __builtin___clear_cache(reinterpret_cast<char*>(target),
+                            reinterpret_cast<char*>(target) + kJumpSize);
+    __builtin___clear_cache(reinterpret_cast<char*>(trampoline),
+                            reinterpret_cast<char*>(trampoline) + kJumpSize + kJumpSize);
+
+    // Record the hook
+    InlineHookEntry entry{};
+    entry.target = target;
+    entry.replacement = hooker;
+    entry.trampoline = trampoline;
+    memcpy(entry.saved_bytes, saved, kJumpSize);
+    entry.overwrite_size = kJumpSize;
+
+    {
+        std::lock_guard<std::mutex> lock(g_inline_hooks_mutex);
+        g_inline_hooks[target] = entry;
+    }
+
+    return trampoline;
+}
+
+/**
+ * Inline unhook: restores original bytes at target.
+ */
+static bool inline_unhook(void* target) {
+    std::lock_guard<std::mutex> lock(g_inline_hooks_mutex);
+    auto it = g_inline_hooks.find(target);
+    if (it == g_inline_hooks.end()) return false;
+
+    const InlineHookEntry& entry = it->second;
+
+    // Restore original bytes
+    if (set_memory_rwx(entry.target, entry.overwrite_size)) {
+        memcpy(entry.target, entry.saved_bytes, entry.overwrite_size);
+        __builtin___clear_cache(
+            reinterpret_cast<char*>(entry.target),
+            reinterpret_cast<char*>(entry.target) + entry.overwrite_size);
+    }
+
+    // Free trampoline
+    munmap(entry.trampoline, page_size());
+    g_inline_hooks.erase(it);
+    return true;
+}
 
 // ---- Global state ----
 
@@ -75,11 +233,11 @@ Java_dev_zenpatch_runtime_NativeBridge_nativeInit(JNIEnv *env, jclass cls) {
     // Initialize LSPlant
     lsplant::InitInfo init_info{};
     init_info.inline_hooker = [](void* target, void* replacement) -> void* {
-        // Use LSPlant's built-in inline hooker
-        return lsplant::HookFunction(target, replacement, nullptr);
+        // Use our minimal inline hook implementation
+        return inline_hook(target, replacement);
     };
     init_info.inline_unhooker = [](void* func) -> bool {
-        return lsplant::UnhookFunction(func);
+        return inline_unhook(func);
     };
     init_info.art_symbol_resolver = [libart](std::string_view symbol) -> void* {
         void* sym = dlsym(libart, std::string(symbol).c_str());

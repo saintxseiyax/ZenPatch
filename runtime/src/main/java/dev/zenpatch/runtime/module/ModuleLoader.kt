@@ -5,7 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import de.robv.android.xposed.IXposedHookLoadPackage
-import de.robv.android.xposed.callbacks.XC_LoadPackage
+import de.robv.android.xposed.XC_LoadPackage
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -66,6 +66,7 @@ object ModuleLoader {
             context.packageName,
             processName,
             context.classLoader,
+            context.applicationInfo,
             true
         )
         notifyPackageLoaded(lpparam)

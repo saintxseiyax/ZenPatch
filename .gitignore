@@ -62,3 +62,5 @@ jacocoHtml/
 # Backup
 *.bak
 *.orig
+release-keystore.jks
+*.jks

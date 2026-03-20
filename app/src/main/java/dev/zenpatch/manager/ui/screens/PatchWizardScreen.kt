@@ -31,7 +31,7 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PatchWizardScreen(
-    onNavigateUp: () -> Unit,
+    onNavigateBack: () -> Unit,
     viewModel: PatchWizardViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -45,7 +45,7 @@ fun PatchWizardScreen(
                     IconButton(onClick = {
                         val s = state
                         if (s is PatchWizardState.SelectApk) {
-                            onNavigateUp()
+                            onNavigateBack()
                         } else {
                             viewModel.goBack()
                         }
@@ -74,7 +74,7 @@ fun PatchWizardScreen(
                 is PatchWizardState.Patching -> PatchingStep(progress = s.progress)
                 is PatchWizardState.ReadyToInstall -> ReadyToInstallStep(
                     apkPath = s.patchedApkPath,
-                    onDone = { viewModel.reset(); onNavigateUp() }
+                    onDone = { viewModel.reset(); onNavigateBack() }
                 )
                 is PatchWizardState.Error -> ErrorStep(
                     message = s.message,
@@ -175,7 +175,7 @@ private fun ConfigureOptionsStep(
                     }
                     Switch(checked = signatureSpoof, onCheckedChange = { signatureSpoof = it })
                 }
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Debuggable", fontWeight = FontWeight.SemiBold)

@@ -20,32 +20,24 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.zenpatch.manager.ui.screens.HomeScreen
 import dev.zenpatch.manager.ui.screens.ModulesScreen
-import dev.zenpatch.manager.ui.screens.PatchScreen
+import dev.zenpatch.manager.ui.screens.PatchWizardScreen
 import dev.zenpatch.manager.ui.screens.SettingsScreen
 
 /** Top-level navigation destinations. */
 sealed class Screen(val route: String) {
     data object Home : Screen("home")
-    data object Patch : Screen("patch")
+    data object PatchWizard : Screen("patch_wizard")
     data object Modules : Screen("modules")
     data object Settings : Screen("settings")
 }
 
-/**
- * Root navigation host for the ZenPatch Manager app.
- *
- * Uses a single [NavHost] with a bottom navigation bar. All screens are top-level
- * destinations to keep the back stack simple. The bottom bar is hidden when the
- * patch wizard is visible, since that screen has its own navigation controls.
- */
 @Composable
 fun ZenPatchNavHost() {
     val navController = rememberNavController()
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = currentBackStackEntry?.destination?.route
 
-    // The patch wizard is a sub-screen reached via FAB; hide the bottom bar there.
-    val showBottomBar = currentRoute != Screen.Patch.route
+    val showBottomBar = currentRoute != Screen.PatchWizard.route
 
     Scaffold(
         bottomBar = {
@@ -91,10 +83,16 @@ fun ZenPatchNavHost() {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(Screen.Home.route) {
-                HomeScreen(navController = navController)
+                HomeScreen(
+                    onNavigateToPatchWizard = {
+                        navController.navigate(Screen.PatchWizard.route)
+                    }
+                )
             }
-            composable(Screen.Patch.route) {
-                PatchScreen(navController = navController)
+            composable(Screen.PatchWizard.route) {
+                PatchWizardScreen(
+                    onNavigateBack = { navController.popBackStack() }
+                )
             }
             composable(Screen.Modules.route) {
                 ModulesScreen()

@@ -9,6 +9,9 @@
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+// Forward declaration
+static void tryAlternativeBypass(JNIEnv* env);
+
 /**
  * Native implementation of hidden API bypass.
  * Calls VMRuntime.setHiddenApiExemptions(["L"]) via JNI, bypassing the
@@ -88,7 +91,7 @@ Java_dev_zenpatch_runtime_HiddenApiBypass_nativeBypassHiddenApis(
  * Alternative bypass: use system property dalvik.vm.dex2oat flag
  * or direct native manipulation of the enforcement policy.
  */
-void tryAlternativeBypass(JNIEnv* env) {
+static void tryAlternativeBypass(JNIEnv* env) {
     // Method 2: dlopen libart and resolve the enforcement setter directly
     void* libart = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
     if (!libart) return;
