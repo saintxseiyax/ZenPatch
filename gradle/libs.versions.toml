@@ -33,7 +33,7 @@ kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 
 # AndroidX Core
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.15.0" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.18.0" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version = "1.7.0" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
