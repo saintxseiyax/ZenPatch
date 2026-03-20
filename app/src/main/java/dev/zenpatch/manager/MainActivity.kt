@@ -99,7 +99,7 @@ fun ZenPatchNavHost(
             }
             composable(Screen.PatchWizard.route) {
                 PatchWizardScreen(
-                    onNavigateUp = { navController.navigateUp() }
+                    onNavigateBack = { navController.navigateUp() }
                 )
             }
             composable(Screen.Settings.route) {

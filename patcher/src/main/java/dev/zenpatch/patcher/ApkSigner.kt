@@ -243,37 +243,140 @@ class ApkSigner {
         return Pair(keyPair.private, listOf(cert))
     }
 
+    /**
+     * Generates a self-signed X509 certificate using KeyStore API.
+     * This approach is Android/JVM-compatible without sun.security.* dependencies.
+     */
     private fun generateSelfSignedCert(keyPair: java.security.KeyPair): X509Certificate {
-        // Use bouncy castle or sun.security for self-signed cert generation.
-        // On Android, we use the built-in provider.
-        val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
+        // Use PKCS12 KeyStore as a vehicle to generate a self-signed cert.
+        // We create a temporary keystore, generate a key entry with a self-signed cert,
+        // and then extract the certificate.
+        val ks = KeyStore.getInstance("PKCS12").apply { load(null, null) }
 
-        // Minimal self-signed cert via X509V1CertificateGenerator fallback:
-        // In a real build environment, use org.bouncycastle:bcpkix-jvm for proper cert generation.
-        // Here we generate using Java's sun.security.x509 classes (available on JVM build host).
-        try {
-            val certInfo = sun.security.x509.X509CertInfo().apply {
-                val from = java.util.Date()
-                val to = java.util.Date(from.time + 365L * 24 * 60 * 60 * 1000 * 25) // 25 years
-                val interval = sun.security.x509.CertificateValidity(from, to)
-                val sn = sun.security.x509.CertificateSerialNumber(java.math.BigInteger.valueOf(System.currentTimeMillis()))
-                val algo = sun.security.x509.AlgorithmId(sun.security.x509.AlgorithmId.sha256WithRSAEncryption_oid)
-                val dn = sun.security.x509.X500Name("CN=ZenPatch,O=ZenPatch,C=US")
-                set(sun.security.x509.X509CertInfo.VALIDITY, interval)
-                set(sun.security.x509.X509CertInfo.SERIAL_NUMBER, sn)
-                set(sun.security.x509.X509CertInfo.SUBJECT, dn)
-                set(sun.security.x509.X509CertInfo.ISSUER, dn)
-                set(sun.security.x509.X509CertInfo.KEY, sun.security.x509.CertificateX509Key(keyPair.public))
-                set(sun.security.x509.X509CertInfo.VERSION, sun.security.x509.CertificateVersion(sun.security.x509.CertificateVersion.V3))
-                set(sun.security.x509.X509CertInfo.ALGORITHM_ID, sun.security.x509.CertificateAlgorithmId(algo))
-            }
-            val cert = sun.security.x509.X509CertImpl(certInfo)
-            cert.sign(keyPair.private, "SHA256withRSA")
-            return cert
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to generate self-signed cert, trying fallback")
-            throw RuntimeException("Cannot generate signing certificate: ${e.message}", e)
+        // Build the certificate using ASN.1 DER encoding directly
+        val certBytes = buildSelfSignedCertDer(
+            keyPair,
+            "CN=ZenPatch, O=ZenPatch, C=US",
+            validityYears = 25
+        )
+        val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
+        val cert = certFactory.generateCertificate(certBytes.inputStream()) as X509Certificate
+        return cert
+    }
+
+    /**
+     * Builds a minimal self-signed X.509v3 certificate in DER format.
+     * Uses raw ASN.1/DER construction — no sun.* or BouncyCastle dependencies.
+     */
+    private fun buildSelfSignedCertDer(
+        keyPair: java.security.KeyPair,
+        dn: String,
+        validityYears: Int
+    ): ByteArray {
+        val now = System.currentTimeMillis()
+        val notBefore = java.util.Date(now)
+        val notAfter = java.util.Date(now + validityYears.toLong() * 365 * 24 * 3600 * 1000)
+
+        // SHA256withRSA OID: 1.2.840.113549.1.1.11
+        val sha256WithRsa = byteArrayOf(
+            0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86.toByte(), 0x48, 0x86.toByte(),
+            0xF7.toByte(), 0x0D, 0x01, 0x01, 0x0B, 0x05, 0x00
+        )
+
+        val serial = java.math.BigInteger.valueOf(now)
+        val issuerDer = encodeDN(dn)
+        val subjectDer = issuerDer
+
+        // Validity: SEQUENCE { UTCTime, UTCTime }
+        val validity = derSequence(
+            encodeUTCTime(notBefore) + encodeUTCTime(notAfter)
+        )
+
+        // SubjectPublicKeyInfo from the public key
+        val spki = keyPair.public.encoded
+
+        // TBSCertificate
+        val version = byteArrayOf(0xA0.toByte(), 0x03, 0x02, 0x01, 0x02) // [0] EXPLICIT INTEGER 2 = v3
+        val serialDer = derInteger(serial)
+        val tbsCert = derSequence(
+            version + serialDer + sha256WithRsa + issuerDer + validity + subjectDer + spki
+        )
+
+        // Sign the TBSCertificate
+        val sig = java.security.Signature.getInstance("SHA256withRSA")
+        sig.initSign(keyPair.private)
+        sig.update(tbsCert)
+        val sigBytes = sig.sign()
+
+        // Certificate = SEQUENCE { tbsCertificate, signatureAlgorithm, signatureValue }
+        val sigBitString = derBitString(sigBytes)
+        return derSequence(tbsCert + sha256WithRsa + sigBitString)
+    }
+
+    // --- ASN.1/DER encoding helpers ---
+
+    private fun derSequence(content: ByteArray): ByteArray {
+        return byteArrayOf(0x30) + derLength(content.size) + content
+    }
+
+    private fun derInteger(value: java.math.BigInteger): ByteArray {
+        val bytes = value.toByteArray()
+        return byteArrayOf(0x02) + derLength(bytes.size) + bytes
+    }
+
+    private fun derBitString(content: ByteArray): ByteArray {
+        // BIT STRING: tag 0x03, length, 0x00 (no unused bits), then content
+        val inner = byteArrayOf(0x00) + content
+        return byteArrayOf(0x03) + derLength(inner.size) + inner
+    }
+
+    private fun derLength(len: Int): ByteArray {
+        return when {
+            len < 0x80 -> byteArrayOf(len.toByte())
+            len < 0x100 -> byteArrayOf(0x81.toByte(), len.toByte())
+            len < 0x10000 -> byteArrayOf(0x82.toByte(), (len shr 8).toByte(), (len and 0xFF).toByte())
+            else -> byteArrayOf(
+                0x83.toByte(), (len shr 16).toByte(), ((len shr 8) and 0xFF).toByte(), (len and 0xFF).toByte()
+            )
         }
+    }
+
+    private fun encodeUTCTime(date: java.util.Date): ByteArray {
+        val sdf = java.text.SimpleDateFormat("yyMMddHHmmss'Z'", java.util.Locale.US)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        val str = sdf.format(date).toByteArray(Charsets.US_ASCII)
+        return byteArrayOf(0x17) + derLength(str.size) + str
+    }
+
+    private fun encodeDN(dn: String): ByteArray {
+        // Parse "CN=ZenPatch, O=ZenPatch, C=US" into ASN.1 RDN sequences
+        val rdns = dn.split(",").map { it.trim() }.map { part ->
+            val (oidName, value) = part.split("=", limit = 2)
+            val oid = when (oidName.trim().uppercase()) {
+                "CN" -> byteArrayOf(0x55, 0x04, 0x03)  // 2.5.4.3
+                "O"  -> byteArrayOf(0x55, 0x04, 0x0A)  // 2.5.4.10
+                "C"  -> byteArrayOf(0x55, 0x04, 0x06)  // 2.5.4.6
+                "OU" -> byteArrayOf(0x55, 0x04, 0x0B)  // 2.5.4.11
+                else -> byteArrayOf(0x55, 0x04, 0x03)  // default to CN
+            }
+            val oidDer = byteArrayOf(0x06, oid.size.toByte()) + oid
+            val valueDer = if (oidName.trim().uppercase() == "C") {
+                // Country uses PrintableString
+                val bytes = value.trim().toByteArray(Charsets.US_ASCII)
+                byteArrayOf(0x13) + derLength(bytes.size) + bytes
+            } else {
+                // Others use UTF8String
+                val bytes = value.trim().toByteArray(Charsets.UTF_8)
+                byteArrayOf(0x0C) + derLength(bytes.size) + bytes
+            }
+            // SET { SEQUENCE { OID, value } }
+            derSet(derSequence(oidDer + valueDer))
+        }
+        return derSequence(rdns.fold(byteArrayOf()) { acc, rdn -> acc + rdn })
+    }
+
+    private fun derSet(content: ByteArray): ByteArray {
+        return byteArrayOf(0x31) + derLength(content.size) + content
     }
 
     private fun isEntryPathSafe(name: String): Boolean {

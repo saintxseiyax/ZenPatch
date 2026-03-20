@@ -10,6 +10,7 @@ plugins {
 // Shared configuration for all Android modules
 subprojects {
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        @Suppress("DEPRECATION")
         kotlinOptions {
             jvmTarget = "17"
             freeCompilerArgs += listOf(

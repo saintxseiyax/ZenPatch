@@ -4,7 +4,6 @@ package dev.zenpatch.runtime
 import android.content.Context
 import android.util.Log
 import de.robv.android.xposed.XposedBridge
-import dev.zenpatch.bridge.NativeBridge
 import dev.zenpatch.runtime.hook.SignatureSpoof
 import dev.zenpatch.runtime.hook.XposedBridgeImpl
 import dev.zenpatch.runtime.module.ModuleLoader
@@ -37,20 +36,23 @@ object ZenPatchRuntime {
 
         try {
             // Step 1: Initialise native bridge + LSPlant
-            NativeBridge.init(context)
-
-            // Step 2: Inject the XposedBridge implementation so Xposed modules can call
-            // XposedBridge.hookMethod() etc. and be backed by the real HookEngine.
-            // Guard against double-init (e.g. in instrumentation tests).
-            if (XposedBridge.getImpl() == null) {
-                XposedBridge.setImpl(XposedBridgeImpl())
-                Log.i(TAG, "XposedBridge implementation registered")
+            val nativeReady = NativeBridge.init()
+            if (!nativeReady) {
+                Log.w(TAG, "Native bridge init failed – running without hooks")
+                return
             }
 
-            // Step 3: Install signature spoofing
+            // Step 2: Inject the XposedBridge implementation
+            XposedBridge.setImpl(XposedBridgeImpl())
+            Log.i(TAG, "XposedBridge implementation registered")
+
+            // Step 3: Hidden API bypass
+            HiddenApiBypass.install()
+
+            // Step 4: Install signature spoofing
             SignatureSpoof.install(context)
 
-            // Step 4: Load modules
+            // Step 5: Load modules
             ModuleLoader.loadModules(context)
 
             Log.i(TAG, "ZenPatch runtime initialised successfully")
