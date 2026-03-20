@@ -8,6 +8,15 @@ android {
     namespace = "dev.zenpatch.manager"
     compileSdk = 36
 
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file("release-keystore.jks")
+            storePassword = "zenpatch2026"
+            keyAlias = "zenpatch"
+            keyPassword = "zenpatch2026"
+        }
+    }
+
     defaultConfig {
         applicationId = "dev.zenpatch.manager"
         minSdk = 31
@@ -29,7 +38,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             isDebuggable = true
@@ -69,6 +78,8 @@ android {
 
 dependencies {
     implementation(project(":patcher"))
+    implementation(project(":runtime"))
+    implementation(project(":bridge"))
     implementation(project(":privilege"))
     implementation(project(":xposed-api"))
 

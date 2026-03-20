@@ -20,7 +20,7 @@ datastore = "1.2.1"
 work-runtime = "2.10.0"
 hilt = "2.51.1"
 desugar = "2.1.4"
-lsplant = "7.0.0"
+lsplant = "6.4"
 shizuku = "13.1.5"
 dhizuku = "2.5.0"
 
