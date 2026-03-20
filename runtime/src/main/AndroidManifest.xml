@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!--
+  Runtime library AndroidManifest.
+  The ConfigProvider is merged into the host app's manifest by the Gradle merge step.
+  The actual authority uses the host app's package name at runtime.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+          ZenPatch runtime IPC provider.
+          Authority is overridden per-app in the patched APK's manifest.
+          tools:replace is used in the patched APK to set the correct authority.
+        -->
+        <provider
+            android:name="dev.zenpatch.runtime.ipc.ConfigProvider"
+            android:authorities="${applicationId}.zenpatch"
+            android:exported="false"
+            android:grantUriPermissions="false" />
+    </application>
+
+</manifest>

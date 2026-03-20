@@ -1,0 +1,3 @@
+-keep class dev.zenpatch.privilege.** { *; }
+-keep class rikka.shizuku.** { *; }
+-dontwarn rikka.**

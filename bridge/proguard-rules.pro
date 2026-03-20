@@ -1,0 +1,2 @@
+-keep class dev.zenpatch.bridge.** { *; }
+-keepclasseswithmembernames class * { native <methods>; }

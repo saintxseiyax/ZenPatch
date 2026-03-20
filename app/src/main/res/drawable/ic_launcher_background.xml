@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon background layer for ZenPatch.
+  Deep purple (#1A0533) matches the Material 3 seed color used in Theme.kt.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#1A0533"/>
+</shape>

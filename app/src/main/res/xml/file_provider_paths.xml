@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<paths>
+    <!-- Patched APKs output directory -->
+    <files-path name="patched_apks" path="output/" />
+    <!-- Cached APKs for processing -->
+    <cache-path name="cached_apks" path="apk_cache/" />
+    <!-- External files (Android 11+) -->
+    <external-files-path name="external_files" path="." />
+</paths>

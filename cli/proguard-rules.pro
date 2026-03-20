@@ -1,0 +1,4 @@
+-keep class dev.zenpatch.cli.** { *; }
+-keep class picocli.** { *; }
+-dontwarn picocli.**
+-dontwarn com.android.apksig.**
