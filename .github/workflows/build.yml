@@ -24,7 +24,7 @@ jobs:
           cache: gradle
 
       - name: Set up NDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           ndk-version: 27.0.12077973
 
